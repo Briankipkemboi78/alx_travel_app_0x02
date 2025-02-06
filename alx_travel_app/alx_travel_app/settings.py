@@ -52,7 +52,11 @@ DEBUG = True #env('DEBUG')
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'localhost']
 
 
-# Application definition
+# Example Celery config (this is just a minimal example, adjust according to your needs)
+CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Or another broker like RabbitMQ
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -83,7 +87,7 @@ ROOT_URLCONF = 'alx_travel_app.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR /'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -97,6 +101,27 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'alx_travel_app.wsgi.application'
+
+
+# settings.py
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}
 
 
 # Database
