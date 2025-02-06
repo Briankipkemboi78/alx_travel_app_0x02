@@ -9,10 +9,22 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-
+from __future__ import absolute_import, unicode_literals
 from pathlib import Path
 import environ
 import os
+from dotenv import load_dotenv
+from celery import Celery
+
+load_dotenv()  # Load environment variables from .env file
+
+CHAPA_SECRET_KEY = os.getenv("CHAPA_SECRET_KEY")
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alx_travel_app.settings')
+app = Celery('alx_travel_app')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+
+app.autodiscover_tasks()
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -35,9 +47,9 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = 'django-insecure-li!!ck!ufu#-0&@vw@#h-!kn+mnl66%!v7+rkqnw(q7$vtk-al'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env('DEBUG')
+DEBUG = True #env('DEBUG')
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'localhost']
 
 
 # Application definition
@@ -63,6 +75,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'alx_travel_app.urls'
@@ -89,15 +102,22 @@ WSGI_APPLICATION = 'alx_travel_app.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': env('DB_NAME'),
+#         'USER': env('DB_USER'),
+#         'PASSWORD': env('DB_PASSWORD'),
+#         'HOST': env('DB_HOST'),
+#         'PORT': env('DB_PORT'),
+
+#     }
+# }
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': env('DB_NAME'),
-        'USER': env('DB_USER'),
-        'PASSWORD': env('DB_PASSWORD'),
-        'HOST': env('DB_HOST'),
-        'PORT': env('DB_PORT'),
-
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / "db.sqlite3",
     }
 }
 

@@ -8,6 +8,8 @@ from drf_yasg import openapi
 from rest_framework.routers import DefaultRouter
 from .views import ListingViewSet, BookingViewSet
 
+from .views import initiate_payment, verify_payment
+from . import views
 
 class SampleAPIView(APIView):
     def get(self, request):
@@ -36,4 +38,8 @@ urlpatterns = [
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='swagger-docs'),
     path('api/sample/', SampleAPIView.as_view(), name='sample-api'),
     path('api/', include(router.urls)),
+    path("api/payment/initiate/", initiate_payment, name="initiate_payment"),
+    path("api/payment/verify/", verify_payment, name="verify_payment"),
+    path('create-booking/', views.create_booking_and_initiate_payment, name='create_booking_and_initiate_payment'),
+    path('verify-payment/', views.verify_payment, name='verify_payment'),
 ]
