@@ -1,16 +1,14 @@
-from django.urls import path
-from . import views
+from django.urls import path, include
+from rest_framework import routers
+from django.contrib.auth.decorators import login_required
+from .views import ListingViewSet, BookingViewSet, initiate_payment, verify_payment
+
+router = routers.DefaultRouter()
+router.register(r'listing', ListingViewSet, basename='listing')
+router.register(r'booking', BookingViewSet, basename='booking')
 
 urlpatterns = [
-    # URL for creating a booking and initiating the payment
-    path('create_booking_and_initiate_payment/', views.create_booking_and_initiate_payment, name='create_booking_and_initiate_payment'),
-
-    # URL for verifying payment after the user completes the payment process
-    path('verify_payment/', views.verify_payment, name='verify_payment'),
-    
-    # For listing, booking, and review management you might use DRF viewsets
-    path('listings/', views.ListingViewSet.as_view({'get': 'list'}), name='listing-list'),
-    path('bookings/', views.BookingViewSet.as_view({'get': 'list'}), name='booking-list'),
-    path('payment-form/', views.payment_form, name='payment_form'),
-    path('initiate-payment/', views.initiate_payment, name='initiate_payment'),
+	path('', include(router.urls)),
+    path('payments/initiate/', login_required(initiate_payment), name='initiate-payment'),
+    path('payments/verify/<str:transaction_id>/', login_required(verify_payment), name='verify-payment'),
 ]

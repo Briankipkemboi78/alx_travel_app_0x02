@@ -1,163 +1,109 @@
 from rest_framework import viewsets
-from django.shortcuts import render, redirect
-from .models import Listing, Booking, Payment
+from .models import Listing, Booking
 from .serializers import ListingSerializer, BookingSerializer
 import requests
-import logging
+from decimal import Decimal
 from django.conf import settings
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from .models import Payment
+from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework import status
-from rest_framework.decorators import api_view
-import uuid
-from django.urls import reverse
+from rest_framework.permissions import IsAuthenticated
+from .models import Payment, Booking
+from .tasks import send_payment_processing_email, send_payment_verified_email
 
-# Listing view set remains unchanged
+
+
 class ListingViewSet(viewsets.ModelViewSet):
-    queryset = Listing.objects.all()
-    serializer_class = ListingSerializer
 
+	queryset = Listing.objects.all()
+	serializer_class = ListingSerializer
 
-# Booking view set remains unchanged
 class BookingViewSet(viewsets.ModelViewSet):
-    queryset = Booking.objects.all()
-    serializer_class = BookingSerializer
+	
+	queryset = Booking.objects.all()
+	serializer_class = BookingSerializer
 
 
-# Set up logging
-logger = logging.getLogger(__name__)
-
-@api_view(['POST'])
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def initiate_payment(request):
-    # Extract booking reference and amount from the request
-    booking_reference = request.data.get('booking_reference')
-    amount = request.data.get('amount')
-
-    if not booking_reference or not amount:
-        return Response({'error': 'Booking reference and amount are required.'}, status=400)
-
-    try:
-        # Ensure amount is a valid positive number
-        amount = float(amount)
-        if amount <= 0:
-            return Response({'error': 'Amount must be greater than zero.'}, status=400)
-    except ValueError:
-        return Response({'error': 'Invalid amount format.'}, status=400)
-
-    # Prepare data for Chapa API request
-    payment_data = {
-        "amount": amount,
-        "booking_reference": booking_reference,
-        "secret_key": settings.CHAPA_SECRET_KEY,
-    }
-
-    try:
-        # Send request to Chapa for payment initialization
-        response = requests.post("https://sandbox.chapa.co/api/v1/initialize", data=payment_data)
-        response_data = response.json()
-
-        if response.status_code == 200:
-            # Store the payment record in the database
-            payment = Payment.objects.create(
-                booking_reference=booking_reference,
-                amount=amount,
-                transaction_id=response_data['transaction_id'],
-                status='Pending'  # Payment is pending until verified
-            )
-
-            # Return the payment URL for user redirection
-            return redirect(response_data['payment_url'])
-
-        else:
-            # Handle failure from the Chapa API
-            logger.error(f"Chapa API error: {response_data}")
-            return Response({'error': 'Payment initiation failed. Please try again.'}, status=500)
-
-    except requests.exceptions.RequestException as e:
-        # Handle network issues or request failures
-        logger.error(f"Error connecting to Chapa API: {str(e)}")
-        return Response({'error': 'Payment initiation failed due to a connection error.'}, status=500)
-
-
-@api_view(['POST'])
-def create_booking_and_initiate_payment(request):
-    # Extract booking data from the request
-    listing_id = request.data.get('listing_id')
-    start_date = request.data.get('start_date')
-    end_date = request.data.get('end_date')
-
-    if not listing_id or not start_date or not end_date:
-        return Response({'error': 'Listing, start date, and end date are required.'}, status=400)
-
-    # Create booking
-    listing = Listing.objects.get(id=listing_id)
     user = request.user
-    booking = Booking.objects.create(
-        listing=listing,
-        user=user,
-        start_date=start_date,
-        end_date=end_date
-    )
+    booking_id = request.data.get("booking_id")
 
-    # Calculate the amount
-    amount = listing.price_per_night * (end_date - start_date).days
+    booking = get_object_or_404(Booking, id=booking_id, user=user)
 
-    # Prepare payment data
-    payment_data = {
+    if hasattr(booking, 'payment') and booking.payment.status == "Completed":
+        return Response({"error": "Payment already completed for this booking"}, status=status.HTTP_400_BAD_REQUEST)
+
+    amount = booking.listing.price_per_night  # Modify if needed for multiple nights
+    transaction_id = f"CHAPA_{booking.id}_{user.id}"
+    
+	#make amount serializable
+    if isinstance(amount, Decimal):
+        amount = float(amount)
+
+    payload = {
         "amount": amount,
-        "booking_reference": str(uuid.uuid4()),
-        "secret_key": settings.CHAPA_SECRET_KEY,
+        "currency": "USD",
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "tx_ref": transaction_id,
+        "customization[title]": "Booking Payment",
     }
+    
+    headers = {"Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}"}
 
-    # Send payment request to Chapa API
-    response = requests.post("https://sandbox.chapa.co/api/v1/initialize", data=payment_data)
-    response_data = response.json()
+    response = requests.post(settings.CHAPA_INITIATE_URL, json=payload, headers=headers)
+    data = response.json()
 
-    if response.status_code == 200:
-        # Store the payment record in the database
-        Payment.objects.create(
-            booking_reference=payment_data['booking_reference'],
-            amount=amount,
-            transaction_id=response_data['transaction_id'],
-            status='Pending'
+    if data.get("status") == "success":
+        # Create or update the payment entry
+        payment, created = Payment.objects.update_or_create(
+            booking=booking,
+            defaults={"user": user, "amount": amount, "transaction_id": transaction_id, "status": "Pending"}
         )
+         # Send payment processing email
+        send_payment_processing_email.delay(user.email, booking.id)
 
-        # Redirect user to the Chapa payment URL
-        return redirect(response_data['payment_url'])
+        return Response({"checkout_url": data["data"]["checkout_url"]}, status=status.HTTP_200_OK)
 
-    return Response({'error': 'Payment initiation failed'}, status=400)
+    return Response({"error": "Payment initiation failed"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(['GET'])
-def verify_payment(request):
-    # Extract transaction ID from query parameters
-    transaction_id = request.query_params.get('transaction_id')
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def verify_payment(request, transaction_id):
+    """This endpoint, in real life scenerio will be called after payment have been made i.e in initiate_payment dfined endpoint
+    and response will be returned """
+    # Get the user from the request object
+    user = request.user
 
-    if not transaction_id:
-        return Response({'error': 'Transaction ID is required.'}, status=400)
+    # Make the Chapa API request to verify payment
+    headers = {"Authorization": f"Bearer {settings.CHAPA_SECRET_KEY}"}
+    response = requests.get(f"{settings.CHAPA_VERIFY_URL}{transaction_id}", headers=headers)
 
-    # Request to verify payment status with Chapa
-    response = requests.get(f"https://sandbox.chapa.co/api/v1/verify/{transaction_id}")
-    response_data = response.json()
+    if response.status_code != 200:
+        return Response({"error": "Payment verification failed."}, status=status.HTTP_400_BAD_REQUEST)
 
-    if response.status_code == 200:
-        try:
-            payment = Payment.objects.get(transaction_id=transaction_id)
-        except Payment.DoesNotExist:
-            return Response({'error': 'Payment not found'}, status=404)
+    data = response.json()
 
-        # Update payment status based on Chapa response
-        payment.status = response_data.get('status', 'Failed')
+    # Verify the payment exists
+    payment = get_object_or_404(Payment, transaction_id=transaction_id)
+
+    # Verify the Chapa payment response
+    if data.get("status") == "success" and data["data"].get("status") == "success":
+        payment.status = "Completed"
         payment.save()
 
-        return Response({'status': payment.status})
+        # Send booking confirmation email after payment success
+        send_payment_verified_email.delay(user.email, payment.booking.id)
 
-    return Response({'error': 'Payment verification failed'}, status=400)
+        return Response({"message": "Payment successful and booking confirmed"}, status=status.HTTP_200_OK)
+    else:
+        # If payment verification fails, update payment status and send failure response
+        payment.status = "Failed"
+        payment.save()
 
-def payment_form(request):
-    return render(request, 'listings/payment_form.html')
-
-def home(request):
-    return render(request, 'home.html')
+        return Response({"message": "Payment failed"}, status=status.HTTP_400_BAD_REQUEST)
